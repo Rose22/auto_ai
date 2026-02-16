@@ -105,17 +105,6 @@ class ConversationManager:
 
             self._tools.append(tool)
 
-    def load_mem(self):
-        """
-        load the AI's persistent memory
-        you can custom code a tool inside tools.py that writes to this file,
-        so that memory storage can be used.
-        """
-
-        if os.path.exists("memory.md"):
-            with open("memory.md", "r") as f:
-                self.insert_context("memory", f.read())
-
     def load_system_prompt(self):
         if not os.path.exists("system_prompt.md"):
             with open("system_prompt.md", 'w') as f:
@@ -217,7 +206,6 @@ if __name__ == "__main__":
             print(f"Loading tool class [{class_name}]..")
             convo.add_tool_class(class_obj)
 
-    convo.load_mem()
     convo.load_system_prompt()
 
     print("Starting up Automatic AI..")
@@ -226,7 +214,7 @@ if __name__ == "__main__":
     while True:
         now = datetime.datetime.now().isoformat()
         try:
-            convo.send("user", f"Current Time: {now} | Last tool used: {convo._last_tool_call} | What do you want to do next? You must ALWAYS call a tool. Choose a different tool than the last tool used. Make sure to record any new interesting information into your persistent memory.", silent=True)
+            convo.send("user", f"Current Time: {now} | Last tool used: {convo._last_tool_call} | What do you want to do next? You must ALWAYS call a tool. Choose a different tool than the last tool used.", silent=True)
 
             system_prompt_repeat_counter += 1
             if system_prompt_repeat_counter > 6:
