@@ -45,7 +45,7 @@ class ConversationManager:
         adds tools to the manager based on a class with functions
         to make tools, just make a class like so:
         class MyToolClass:
-            def search_web(self, query: str):
+            def search_web(query: str):
                 search_the_web_or_whatever(query)
         """
 
