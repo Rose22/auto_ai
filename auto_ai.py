@@ -8,6 +8,7 @@ import inspect
 import datetime
 import time
 
+# try to load the config
 if not os.path.exists("config.yaml"):
     print("Error: config.yaml not found! Please ensure there is a config file.")
     exit()
@@ -21,6 +22,8 @@ except:
     exit()
 
 def log(event: str, msg: str, truncate: bool = True):
+    """log a message to both stdout and a log file"""
+
     event = event.upper()
     current_time = datetime.datetime.strftime(datetime.datetime.now(), "%d-%m-%Y %H:%M")
 
@@ -33,6 +36,8 @@ def log(event: str, msg: str, truncate: bool = True):
         f.write(msg_formatted)
 
 class ConversationManager:
+    """handles sending/receiving messages to/from the AI"""
+
     def __init__(self, client):
         self._client = client
         self._ctx = []
@@ -64,9 +69,12 @@ class ConversationManager:
             if not callable(func_obj):
                 continue
 
+            # dynamically load class methods from classes
             func_params = inspect.signature(func_obj).parameters
             func_params_translated = {}
+            # add method arguments (parameters) to the tool call object
             for param_name, param in func_params.items():
+                # translate parameter type name to the correct format
                 param_split = str(param).split(":")
                 param_name = param_split[0]
                 param_type = "str"
@@ -76,6 +84,7 @@ class ConversationManager:
                 param_type_map = {
                     "str": "string",
                     "int": "integer"
+                    # TODO: support more types
                 }
 
                 for word, replacement in param_type_map.items():
@@ -84,10 +93,12 @@ class ConversationManager:
 
                 func_params_translated[param_name] = {"type": param_type,  "description": None}
 
+            # if there's a docstring, make sure to pass that on to the LLM
             docstring = ""
             if "__doc__" in dir(func_obj):
                 docstring = func_obj.__doc__
 
+            # build toolcall object
             tool = {
                 "type": "function",
                 "function": {
@@ -113,8 +124,9 @@ class ConversationManager:
         with open("system_prompt.md", "r") as f:
             self.insert_context("system", f.read())
 
-    
     def insert_context(self, role: str, msg: str):
+        """inserts something into the context window without sending a message"""
+
         msg_stripped = msg.strip().replace("\n", " ")
         log("context", f"inserted into context as {role}: {msg_stripped}")
         return self._ctx.append({"role": role, "content": msg})
@@ -184,19 +196,14 @@ class ConversationManager:
             self._ctx.append({"role": "assistant", "content": result})
             log("AI", result)
 
-        # trim context if it exceeds a certain amount of messages
-        # if len(self._ctx) > 6:
-        #     self._ctx = self._ctx[1:]
-
-        # write current context to file for debugging
-        with open("ctx", "w") as f:
-            f.write(json.dumps(self._ctx, indent=2))
         return result
 
 if __name__ == "__main__":
+    # connect to the AI endpoint
     client = openai.OpenAI(base_url="http://localhost:5001/v1", api_key="dummy")
 
     convo = ConversationManager(client)
+
     # load all custom tool classes from tools.py
     import tools
     for tool_class in inspect.getmembers(tools):
@@ -209,11 +216,13 @@ if __name__ == "__main__":
     convo.load_system_prompt()
 
     print("Starting up Automatic AI..")
-
     system_prompt_repeat_counter = 0
+
+    # main loop
     while True:
         now = datetime.datetime.now().isoformat()
         try:
+            # basically the heartbeat
             convo.send("user", f"Current Time: {now} | Last tool used: {convo._last_tool_call} | What do you want to do next? You must ALWAYS call a tool. Choose a different tool than the last tool used.", silent=True)
 
             system_prompt_repeat_counter += 1
