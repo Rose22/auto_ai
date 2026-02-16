@@ -219,7 +219,6 @@ if __name__ == "__main__":
             system_prompt_repeat_counter += 1
             if system_prompt_repeat_counter > 6:
                 # insert system prompt again.. so that it never forgets
-                convo.load_mem()
                 convo.load_system_prompt()
                 system_prompt_repeat_counter = 0
 
