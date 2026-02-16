@@ -3,10 +3,8 @@ import sys
 import openai
 import json
 import yaml
-import msgpack
 import inspect
 import datetime
-import time
 
 # try to load the config
 if not os.path.exists("config.yaml"):
