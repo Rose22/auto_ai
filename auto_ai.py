@@ -40,6 +40,7 @@ class ConversationManager:
         self._client = client
         self._ctx = []
         self._tools = []
+        self._toolclasses = []
         self._last_tool_call = None
         self._last_tool_call_args = None
 
@@ -50,11 +51,13 @@ class ConversationManager:
         class MyToolClass:
             def search_web(query: str):
                 search_the_web_or_whatever(query)
+
+        you can also just pass a python module to this function!
         """
 
-        self._toolclass = toolclass
+        self._toolclasses.append(toolclass)
 
-        for func_name in dir(self._toolclass):
+        for func_name in dir(toolclass):
             if func_name.startswith("_"):
                 # skip private methods and other private properties
                 continue
@@ -74,14 +77,16 @@ class ConversationManager:
             for param_name, param in func_params.items():
                 # translate parameter type name to the correct format
                 param_split = str(param).split(":")
-                param_name = param_split[0]
+                param_name = param_split[0].strip()
                 param_type = "str"
                 if len(param_split) > 1:
-                    param_type = param_split[1].strip()
-                
+                    param_type = param_split[1].split()[0].strip()
+
                 param_type_map = {
                     "str": "string",
-                    "int": "integer"
+                    "int": "integer",
+                    "list": "array",
+                    "bool": "boolean"
                     # TODO: support more types
                 }
 
@@ -89,7 +94,7 @@ class ConversationManager:
                     if param_type == word:
                         param_type = replacement
 
-                func_params_translated[param_name] = {"type": param_type,  "description": None}
+                func_params_translated[param_name] = {"type": param_type, "description": None}
 
             # if there's a docstring, make sure to pass that on to the LLM
             docstring = ""
@@ -105,6 +110,7 @@ class ConversationManager:
                     "parameters": {
                         "type": "object",
                         "properties": func_params_translated,
+                        #"properties": {},
                         "required": [],
                         "additionalProperties": False,
                     },
@@ -112,6 +118,7 @@ class ConversationManager:
                 },
             }
 
+            log("loading", f"adding tool {func_name}")
             self._tools.append(tool)
 
     def load_system_prompt(self):
@@ -120,14 +127,14 @@ class ConversationManager:
                 f.write("")
 
         with open("system_prompt.md", "r") as f:
+            log("system", "re-inserting system prompt")
             self.insert_context("system", f.read())
 
     def insert_context(self, role: str, msg: str):
         """inserts something into the context window without sending a message"""
 
         msg_stripped = msg.strip().replace("\n", " ")
-        log("context", f"inserted into context as {role}: {msg_stripped}")
-        return self._ctx.append({"role": role, "content": msg})
+        return self._ctx.append({"role": role, "content": str(msg)})
 
     def send(self, role: str, msg: str, silent=False):
         """send a message to the AI as the chosen role and stream the response"""
@@ -135,12 +142,12 @@ class ConversationManager:
         if not silent:
             log("request to AI", f"{role}: {msg}")
 
+        self.insert_context(role, str(msg))
+
         # send the request
         stream = self._client.chat.completions.create(
             model=config.get("model"),
-            messages=self._ctx+[
-                {"role": role, "content": msg}
-            ],
+            messages=self._ctx,
             tools=self._tools,
             stream=True
         )
@@ -170,28 +177,41 @@ class ConversationManager:
 
         # call any tool calls based on the stored tool call function
         for index, tool_call in final_tool_calls.items():
-            # does the method exist within the class?
-            if hasattr(self._toolclass, tool_call.function.name):
+            # does the method exist within any of the loaded classes?
+            toolclass = None
+            for class_obj in self._toolclasses:
+                if toolclass:
+                    # use the first class found that has the target method
+                    continue
+
+                if hasattr(class_obj, tool_call.function.name):
+                    toolclass = class_obj
+
+            if toolclass:
                 if tool_call.function.name == self._last_tool_call and tool_call.function.arguments == self._last_tool_call_args:
                     log("toolcall", "AI tried calling the same tool again")
-                    self.send("tool", json.dumps({"error": f"ALERT!! You are entering an endless loop. Stop what you are doing and choose a different action. Details: You already called this tool before! look at your list of tools and call a tool that isn't {tool_call.function.name}."}))
+                    self.send("system", json.dumps({"error": f"ALERT!! You are entering an endless loop. Stop what you are doing and choose a different action. Details: You already called this tool before! look at your list of tools and call a tool that isn't {tool_call.function.name}."}))
+                    return
                 # then get the class method object
-                func_callable = getattr(self._toolclass, tool_call.function.name)
+                func_callable = getattr(toolclass, tool_call.function.name)
                 # format its arguments in a JSON format the llm will understand
                 arg_obj = json.loads(tool_call.function.arguments)
                 log("toolcall", f"calling tool {tool_call.function.name}")
                 # call the class method
                 func_response = func_callable(**arg_obj)
                 # and add the method's return value to the LLM's context window as a tool call response
-                self._ctx.append({"role": "tool", "tool_call_id": tool_call.id, "content": func_response})
+                self._ctx.append({"role": "tool_call", "tool_call_id": tool_call.id, "arguments": tool_call.function.arguments})
+                self._ctx.append({"role": "tool_response", "tool_call_id": tool_call.id, "content": json.dumps(str(func_response))})
 
                 self._last_tool_call = tool_call.function.name
                 self._last_tool_call_args = tool_call.function.arguments
+            else:
+                log("toolcall", f"tried to call tool {tool_call.function.name} but couldnt find it?!")
 
         # return the final streamed text response
         result = "".join(chunks)
         if result:
-            self._ctx.append({"role": "assistant", "content": result})
+            self._ctx.append({"role": "assistant", "content": str(result)})
             log("AI", result)
 
         return result
@@ -203,13 +223,9 @@ if __name__ == "__main__":
     convo = ConversationManager(client)
 
     # load all custom tool classes from tools.py
+    print("Loading tools from tools.py..")
     import tools
-    for tool_class in inspect.getmembers(tools):
-        class_name = tool_class[0]
-        class_obj = tool_class[1]
-        if inspect.isclass(class_obj) and not class_name.startswith("__"):
-            print(f"Loading tool class [{class_name}]..")
-            convo.add_tool_class(class_obj)
+    convo.add_tool_class(tools)
 
     convo.load_system_prompt()
 
@@ -221,7 +237,7 @@ if __name__ == "__main__":
         now = datetime.datetime.now().isoformat()
         try:
             # basically the heartbeat
-            convo.send("user", f"Current Time: {now} | Last tool used: {convo._last_tool_call} | What do you want to do next? You must ALWAYS call a tool. Choose a different tool than the last tool used.", silent=True)
+            convo.send("system", f"Current Time: {now} | Last tool used: {convo._last_tool_call} | What do you want to do next? You must ALWAYS call a tool. Choose a different tool than the last tool used.", silent=True)
 
             system_prompt_repeat_counter += 1
             if system_prompt_repeat_counter > 6:
