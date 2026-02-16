@@ -1,0 +1,4 @@
+api_url: http://localhost:5001/v1
+api_key: kobold
+model: kobold
+logfile: auto_ai.log
